@@ -1,0 +1,533 @@
+"use client";
+
+import { useState, useRef } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+type Step = "method" | "info" | "verify" | "reset" | "success";
+type Method = "email" | "phone";
+
+export default function FindPasswordPage() {
+  const router = useRouter();
+  const [step, setStep] = useState<Step>("method");
+  const [method, setMethod] = useState<Method>("phone");
+
+  // Form data
+  const [formData, setFormData] = useState({
+    email: "",
+    phone1: "010",
+    phone2: "",
+    phone3: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+
+  // Verification
+  const [verificationCode, setVerificationCode] = useState(["", "", "", "", "", ""]);
+  const codeRefs = [
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+  ];
+
+  // Reset token
+  const [resetToken, setResetToken] = useState("");
+
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const phone2Ref = useRef<HTMLInputElement>(null);
+  const phone3Ref = useRef<HTMLInputElement>(null);
+
+  // Step 1: 인증 방법 선택
+  const handleMethodSelect = (selectedMethod: Method) => {
+    setMethod(selectedMethod);
+    setStep("info");
+    setError("");
+  };
+
+  // Step 2: 정보 입력 후 인증번호 발송
+  const handleSendCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    const value =
+      method === "phone"
+        ? `${formData.phone1}-${formData.phone2}-${formData.phone3}`
+        : formData.email;
+
+    try {
+      const response = await fetch("/api/auth/send-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          method,
+          value,
+          purpose: "find-password",
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setStep("verify");
+        // 개발 환경에서는 코드 자동 입력
+        if (data.code && process.env.NODE_ENV === "development") {
+          console.log("인증번호:", data.code);
+        }
+      } else {
+        setError(data.error || "인증번호 발송에 실패했습니다");
+      }
+    } catch (error) {
+      console.error("Send code error:", error);
+      setError("서버 오류가 발생했습니다");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Step 3: 인증번호 입력 처리
+  const handleCodeChange = (index: number, value: string) => {
+    const numericValue = value.replace(/[^0-9]/g, "");
+
+    if (numericValue.length <= 1) {
+      const newCode = [...verificationCode];
+      newCode[index] = numericValue;
+      setVerificationCode(newCode);
+
+      // 자동 포커스 이동
+      if (numericValue && index < 5) {
+        codeRefs[index + 1].current?.focus();
+      }
+    }
+  };
+
+  // Step 4: 인증번호 확인
+  const handleVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    const code = verificationCode.join("");
+    const value =
+      method === "phone"
+        ? `${formData.phone1}-${formData.phone2}-${formData.phone3}`
+        : formData.email;
+
+    try {
+      const response = await fetch("/api/auth/verify-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          method,
+          value,
+          code,
+          purpose: "find-password",
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setResetToken(data.resetToken);
+        setStep("reset");
+      } else {
+        setError(data.error || "인증번호가 일치하지 않습니다");
+      }
+    } catch (error) {
+      console.error("Verify code error:", error);
+      setError("서버 오류가 발생했습니다");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Step 5: 비밀번호 재설정
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    // 비밀번호 검증
+    if (formData.newPassword.length < 6) {
+      setError("비밀번호는 6자 이상이어야 합니다");
+      setLoading(false);
+      return;
+    }
+
+    const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(formData.newPassword);
+    if (!hasSpecialChar) {
+      setError("비밀번호는 특수문자를 포함해야 합니다");
+      setLoading(false);
+      return;
+    }
+
+    if (formData.newPassword !== formData.confirmPassword) {
+      setError("비밀번호가 일치하지 않습니다");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resetToken,
+          newPassword: formData.newPassword,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setStep("success");
+        // 2초 후 로그인 페이지로 이동
+        setTimeout(() => {
+          router.push("/auth/signin");
+        }, 2000);
+      } else {
+        setError(data.error || "비밀번호 재설정에 실패했습니다");
+      }
+    } catch (error) {
+      console.error("Reset password error:", error);
+      setError("서버 오류가 발생했습니다");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePhoneChange = (
+    field: "phone1" | "phone2" | "phone3",
+    value: string
+  ) => {
+    const numericValue = value.replace(/[^0-9]/g, "");
+    setFormData({ ...formData, [field]: numericValue });
+
+    if (field === "phone2" && numericValue.length === 4) {
+      phone3Ref.current?.focus();
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">
+      <div className="w-full max-w-md">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 border border-gray-200 dark:border-gray-700">
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold text-black dark:text-white mb-2">
+              비밀번호 찾기
+            </h2>
+            <p className="text-gray-600 dark:text-gray-400">
+              {step === "method" && "인증 방법을 선택하세요"}
+              {step === "info" && "회원 정보를 입력하세요"}
+              {step === "verify" && "인증번호를 입력하세요"}
+              {step === "reset" && "새 비밀번호를 설정하세요"}
+              {step === "success" && "비밀번호가 변경되었습니다"}
+            </p>
+          </div>
+
+          {/* Step 1: 인증 방법 선택 */}
+          {step === "method" && (
+            <div className="space-y-4">
+              <button
+                onClick={() => handleMethodSelect("phone")}
+                className="w-full p-6 border-2 border-gray-300 dark:border-gray-600 rounded-xl hover:border-blue-600 dark:hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition group"
+              >
+                <div className="flex items-center gap-4">
+                  <span className="material-symbols-outlined text-4xl text-blue-600 dark:text-blue-400">
+                    phone_iphone
+                  </span>
+                  <div className="text-left">
+                    <h3 className="font-bold text-lg text-black dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400">
+                      휴대폰 인증
+                    </h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      휴대폰번호로 인증번호 받기
+                    </p>
+                  </div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => handleMethodSelect("email")}
+                className="w-full p-6 border-2 border-gray-300 dark:border-gray-600 rounded-xl hover:border-blue-600 dark:hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition group"
+              >
+                <div className="flex items-center gap-4">
+                  <span className="material-symbols-outlined text-4xl text-blue-600 dark:text-blue-400">
+                    email
+                  </span>
+                  <div className="text-left">
+                    <h3 className="font-bold text-lg text-black dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400">
+                      이메일 인증
+                    </h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      이메일 주소로 인증번호 받기
+                    </p>
+                  </div>
+                </div>
+              </button>
+
+              <div className="flex gap-2 text-sm justify-center pt-4">
+                <Link
+                  href="/auth/signin"
+                  className="text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+                >
+                  로그인
+                </Link>
+                <span className="text-gray-400 dark:text-gray-600">|</span>
+                <Link
+                  href="/auth/find-email"
+                  className="text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+                >
+                  아이디 찾기
+                </Link>
+                <span className="text-gray-400 dark:text-gray-600">|</span>
+                <Link
+                  href="/auth/signup"
+                  className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                >
+                  회원가입
+                </Link>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: 정보 입력 */}
+          {step === "info" && (
+            <form onSubmit={handleSendCode} className="space-y-4">
+              {error && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                  <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                </div>
+              )}
+
+              {method === "phone" ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    휴대폰번호 *
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={formData.phone1}
+                      readOnly
+                      className="w-16 px-3 py-3 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-100 dark:bg-gray-600 text-black dark:text-white text-center"
+                    />
+                    <span className="text-gray-500">-</span>
+                    <input
+                      ref={phone2Ref}
+                      type="text"
+                      value={formData.phone2}
+                      onChange={(e) => handlePhoneChange("phone2", e.target.value)}
+                      maxLength={4}
+                      placeholder="1234"
+                      required
+                      className="w-24 px-3 py-3 border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 text-black dark:text-white text-center"
+                    />
+                    <span className="text-gray-500">-</span>
+                    <input
+                      ref={phone3Ref}
+                      type="text"
+                      value={formData.phone3}
+                      onChange={(e) => handlePhoneChange("phone3", e.target.value)}
+                      maxLength={4}
+                      placeholder="5678"
+                      required
+                      className="w-24 px-3 py-3 border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 text-black dark:text-white text-center"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    가입 시 등록한 휴대폰번호를 입력하세요
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    이메일 *
+                  </label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) =>
+                      setFormData({ ...formData, email: e.target.value })
+                    }
+                    required
+                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white"
+                    placeholder="example@example.com"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    가입 시 등록한 이메일 주소를 입력하세요
+                  </p>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                {loading ? "발송 중..." : "인증번호 받기"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStep("method")}
+                className="w-full px-6 py-3 border-2 border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition font-medium"
+              >
+                이전으로
+              </button>
+            </form>
+          )}
+
+          {/* Step 3: 인증번호 입력 */}
+          {step === "verify" && (
+            <form onSubmit={handleVerifyCode} className="space-y-6">
+              {error && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                  <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                </div>
+              )}
+
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <div className="flex gap-2">
+                  <span className="material-symbols-outlined text-blue-600 dark:text-blue-400 text-sm">
+                    info
+                  </span>
+                  <p className="text-sm text-blue-800 dark:text-blue-200">
+                    {method === "phone"
+                      ? `${formData.phone1}-${formData.phone2}-${formData.phone3}`
+                      : formData.email}
+                    로 발송된 6자리 인증번호를 입력하세요
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 text-center">
+                  인증번호 6자리
+                </label>
+                <div className="flex gap-2 justify-center">
+                  {verificationCode.map((digit, index) => (
+                    <input
+                      key={index}
+                      ref={codeRefs[index]}
+                      type="text"
+                      value={digit}
+                      onChange={(e) => handleCodeChange(index, e.target.value)}
+                      maxLength={1}
+                      className="w-12 h-14 text-center text-2xl font-bold border-2 border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-white dark:bg-gray-700 text-black dark:text-white"
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || verificationCode.join("").length !== 6}
+                className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                {loading ? "확인 중..." : "인증하기"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setStep("info");
+                  setVerificationCode(["", "", "", "", "", ""]);
+                  setError("");
+                }}
+                className="w-full px-6 py-3 border-2 border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition font-medium"
+              >
+                다시 받기
+              </button>
+            </form>
+          )}
+
+          {/* Step 4: 비밀번호 재설정 */}
+          {step === "reset" && (
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              {error && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                  <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  새 비밀번호 *
+                </label>
+                <input
+                  type="password"
+                  value={formData.newPassword}
+                  onChange={(e) =>
+                    setFormData({ ...formData, newPassword: e.target.value })
+                  }
+                  required
+                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white"
+                  placeholder="6자 이상, 특수문자 포함"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  6자 이상, 특수문자를 포함해야 합니다
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  비밀번호 확인 *
+                </label>
+                <input
+                  type="password"
+                  value={formData.confirmPassword}
+                  onChange={(e) =>
+                    setFormData({ ...formData, confirmPassword: e.target.value })
+                  }
+                  required
+                  className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent bg-white dark:bg-gray-700 text-black dark:text-white"
+                  placeholder="비밀번호 재입력"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                {loading ? "변경 중..." : "비밀번호 변경"}
+              </button>
+            </form>
+          )}
+
+          {/* Step 5: 완료 */}
+          {step === "success" && (
+            <div className="space-y-6">
+              <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-6 text-center">
+                <div className="flex justify-center mb-4">
+                  <span className="material-symbols-outlined text-5xl text-green-600 dark:text-green-400">
+                    check_circle
+                  </span>
+                </div>
+                <p className="text-lg font-bold text-green-900 dark:text-green-100 mb-2">
+                  비밀번호가 변경되었습니다
+                </p>
+                <p className="text-sm text-green-800 dark:text-green-200">
+                  잠시 후 로그인 페이지로 이동합니다
+                </p>
+              </div>
+
+              <Link
+                href="/auth/signin"
+                className="block w-full text-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+              >
+                로그인하기
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

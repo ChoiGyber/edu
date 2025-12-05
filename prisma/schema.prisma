@@ -1,0 +1,318 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["public", "tenant_default"]
+}
+
+// ===== Public Schema (테넌트 관리) =====
+
+model Company {
+  id                    String            @id @default(uuid())
+  name                  String
+  domain                String            @unique
+  schemaName            String            @unique @map("schema_name")
+  logoUrl               String?           @map("logo_url")
+  ipRanges              String[]          @default([]) @map("ip_ranges")
+  subscriptionPlan      SubscriptionPlan  @default(INDIVIDUAL) @map("subscription_plan")
+  subscriptionExpiresAt DateTime?         @map("subscription_expires_at")
+  isActive              Boolean           @default(true) @map("is_active")
+  createdAt             DateTime          @default(now()) @map("created_at")
+
+  @@map("companies")
+  @@schema("public")
+}
+
+enum SubscriptionPlan {
+  INDIVIDUAL // 개인
+  COMPANY // 회사
+
+  @@schema("public")
+}
+
+// ===== Tenant Schema (기본 스키마 예제) =====
+
+model User {
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  name               String
+  phone              String?
+  companyName        String?             @map("company_name")
+  siteName           String?             @map("site_name")
+  industry           Industry?
+
+  // OAuth
+  provider           String? // "google", "kakao", "naver"
+  providerId         String?             @map("provider_id")
+  passwordHash       String?             @map("password_hash")
+
+  // 역할 및 권한
+  role               UserRole            @default(USER)
+  isActive           Boolean             @default(true) @map("is_active")
+
+  // 설정
+  preferredLanguages String[]            @default(["ko"]) @map("preferred_languages")
+  notificationEmail  String?             @map("notification_email")
+  emailNotification  Boolean             @default(false) @map("email_notification")
+
+  // Relations
+  sessions           Session[]
+  ownedCourses       EducationCourse[]
+  executedHistories  EducationHistory[]  @relation("ExecutedBy")
+  accounts           Account[]
+
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+
+  @@map("users")
+  @@schema("tenant_default")
+}
+
+model Account {
+  id                String  @id @default(uuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+  @@schema("tenant_default")
+}
+
+enum UserRole {
+  ADMIN // 최고 관리자 (모든 권한)
+  SUB_ADMIN // 보조 관리자 (교육 실시, 조회만)
+  USER // 일반 사용자 (교육 수강)
+  WITHDRAWN // 탈퇴
+
+  @@schema("tenant_default")
+}
+
+enum Industry {
+  CONSTRUCTION // 건설업
+  MANUFACTURING // 제조업
+  LOGISTICS // 물류/운송
+  FOOD // 식음료
+  CHEMICAL // 화학
+  ELECTRICITY // 전기/전자
+  SERVICE // 서비스업
+  ETC // 기타
+
+  @@schema("tenant_default")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  ipAddress String   @map("ip_address")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("sessions")
+  @@schema("tenant_default")
+}
+
+// ===== 영상 관리 =====
+
+model Video {
+  id             String        @id @default(uuid())
+  title          String
+  description    String?
+  duration       Int // 초 단위
+  thumbnailUrl   String        @map("thumbnail_url")
+
+  // 영상 제공자
+  provider       VideoProvider
+  providerId     String        @map("provider_id")
+  videoUrl       String        @map("video_url")
+  embedHtml      String?       @map("embed_html") @db.Text
+
+  // 분류
+  category       String[]      @default([])
+  industry       Industry[]
+  tags           String[]      @default([])
+
+  // 다국어 자막
+  hasKoreanAudio Boolean       @default(true) @map("has_korean_audio")
+  subtitles      Json? // SubtitleTrack[]
+  aiTranslation  Boolean       @default(false) @map("ai_translation")
+
+  // 소유 및 공개
+  uploadedBy     String        @map("uploaded_by")
+  isPublic       Boolean       @default(true) @map("is_public")
+
+  // 통계
+  viewCount      Int           @default(0) @map("view_count")
+  usedInCourses  Int           @default(0) @map("used_in_courses")
+
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  @@index([provider, providerId])
+  @@index([industry])
+  @@map("videos")
+  @@schema("tenant_default")
+}
+
+enum VideoProvider {
+  VIMEO
+  CLOUDFLARE
+
+  @@schema("tenant_default")
+}
+
+// ===== 교육 과정 =====
+
+model EducationCourse {
+  id            String             @id @default(uuid())
+  title         String
+  description   String?
+  thumbnail     String?
+
+  // 노드 구조
+  nodes         Json // EducationNode[]
+  edges         Json // EducationEdge[]
+
+  totalDuration Int                @default(0) @map("total_duration")
+
+  // 소유 및 공유
+  ownerId       String             @map("owner_id")
+  owner         User               @relation(fields: [ownerId], references: [id])
+
+  isPublic      Boolean            @default(false) @map("is_public")
+  sharedWith    String[]           @default([]) @map("shared_with")
+
+  // 통계
+  viewCount     Int                @default(0) @map("view_count")
+  usedCount     Int                @default(0) @map("used_count")
+
+  // Relations
+  histories     EducationHistory[]
+
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+
+  @@index([ownerId])
+  @@map("education_courses")
+  @@schema("tenant_default")
+}
+
+// ===== 교육 이력 =====
+
+model EducationHistory {
+  id                  String          @id @default(uuid())
+
+  // 교육 과정 참조
+  courseId            String          @map("course_id")
+  course              EducationCourse @relation(fields: [courseId], references: [id])
+  courseTitleSnapshot String          @map("course_title_snapshot")
+
+  // 실행 정보
+  startedAt           DateTime        @map("started_at")
+  completedAt         DateTime?       @map("completed_at")
+  totalAttendees      Int             @map("total_attendees")
+
+  // 참석자 데이터 (JSON)
+  attendees           Json // Attendee[]
+  byNationality       Json?           @map("by_nationality") // { "KO": 12, "VN": 3 }
+
+  // PDF 증빙
+  certificateUrl      String?         @map("certificate_url")
+  screenshots         String[]        @default([]) // 교육 화면 캡처
+
+  // QR 설정
+  qrTokenExpiry       Int             @default(30) @map("qr_token_expiry") // 분 단위
+
+  // 실행자
+  executedBy          String          @map("executed_by")
+  executor            User            @relation("ExecutedBy", fields: [executedBy], references: [id])
+
+  createdAt           DateTime        @default(now()) @map("created_at")
+
+  @@index([courseId])
+  @@index([executedBy, completedAt])
+  @@map("education_histories")
+  @@schema("tenant_default")
+}
+
+// ===== 설정 =====
+
+model SystemSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+  @@schema("tenant_default")
+}
+
+// ===== 팝업 관리 =====
+
+model Popup {
+  id          String   @id @default(uuid())
+  title       String
+  content     String   @db.Text
+  imageUrl    String?  @map("image_url")
+
+  // 위치 및 크기 (픽셀 단위)
+  positionX   Int      @default(100) @map("position_x")
+  positionY   Int      @default(100) @map("position_y")
+  width       Int      @default(400)
+  height      Int      @default(300)
+
+  // 표시 기간
+  startDate   DateTime @map("start_date")
+  endDate     DateTime @map("end_date")
+
+  // 설정
+  isActive    Boolean  @default(true) @map("is_active")
+  order       Int      @default(0) // 표시 순서
+
+  // Relations
+  dismissals  PopupDismissal[]
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("popups")
+  @@schema("tenant_default")
+}
+
+// 팝업 "오늘 하루 보지 않기" 기록
+model PopupDismissal {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  popupId        String   @map("popup_id")
+  popup          Popup    @relation(fields: [popupId], references: [id], onDelete: Cascade)
+
+  dismissedUntil DateTime @map("dismissed_until") // 이 날짜까지 표시 안 함
+
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, popupId])
+  @@map("popup_dismissals")
+  @@schema("tenant_default")
+}
